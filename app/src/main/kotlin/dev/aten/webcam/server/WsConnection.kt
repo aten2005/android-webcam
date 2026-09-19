@@ -160,8 +160,9 @@ class WsConnection(
     }
 
     companion object {
-        const val PING_INTERVAL_MS = 20_000L
-        const val READ_TIMEOUT_MS = 60_000
+        // A viewer that vanished without closing holds a slot, and keeps the camera on, until this read timeout.
+        const val PING_INTERVAL_MS = 5_000L
+        const val READ_TIMEOUT_MS = 20_000
         private const val CLOSE_GRACE_MS = 2_000L
         private const val DRAIN_READ_TIMEOUT_MS = 500
         private val POISON = ByteArray(0)
