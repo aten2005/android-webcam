@@ -33,6 +33,8 @@ class StaticAssets(private val source: AssetSource) {
         const val INDEX_PATH = "/"
         const val LOGIN_PATH = "/login"
 
+        val paths: Set<String> get() = ROUTES.keys
+
         private val ROUTES = mapOf(
             INDEX_PATH to Route("index.html", HTML, public = false),
             "/app.js" to Route("app.js", JS, public = false),

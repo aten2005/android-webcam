@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IP Webcam</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="viewer">
+    <div id="stage" class="stage">
+      <canvas id="video" width="1280" height="720"></canvas>
+      <div id="overlay" class="overlay">
+        <p id="overlay-text">The camera turns on when you connect and off when you leave.</p>
+        <button id="start" type="button" class="primary">Connect</button>
+      </div>
+      <p id="notice" class="notice" role="status" hidden></p>
+    </div>
+
+    <div class="toolbar" role="toolbar" aria-label="Stream controls">
+      <button id="mute" type="button" disabled>Mute</button>
+      <button id="talk" type="button" disabled title="Hold to talk through the device speaker">Hold to talk</button>
+      <button id="switch-camera" type="button" disabled>Switch camera</button>
+      <button id="torch" type="button" disabled>Torch</button>
+      <label class="inline">Quality
+        <select id="quality" disabled>
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </label>
+      <button id="rotate" type="button">Rotate</button>
+      <button id="fullscreen" type="button">Fullscreen</button>
+      <span class="spacer"></span>
+      <span id="stats" class="stats"></span>
+      <button id="disconnect" type="button" disabled>Disconnect</button>
+      <button id="logout" type="button">Log out</button>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
