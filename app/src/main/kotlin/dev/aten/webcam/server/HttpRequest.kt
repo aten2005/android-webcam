@@ -22,6 +22,10 @@ class HttpRequest(
             ?.firstOrNull { it.startsWith("$name=") }
             ?.substring(name.length + 1)
 
+    /** The raw (not percent-decoded) value of the first [name] parameter in the query string. */
+    fun queryParam(name: String): String? =
+        query.split('&').firstOrNull { it.startsWith("$name=") }?.substring(name.length + 1)
+
     fun headerHasToken(name: String, token: String): Boolean =
         header(name)?.split(',')?.any { it.trim().equals(token, ignoreCase = true) } == true
 

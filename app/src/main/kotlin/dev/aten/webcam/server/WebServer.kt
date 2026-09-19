@@ -220,6 +220,7 @@ class WebServer(
             socket, input, output,
             remoteAddress = clientAddress(request, socket),
             userAgent = request.header("user-agent").orEmpty(),
+            clientId = request.queryParam("client")?.takeIf(CLIENT_ID::matches),
         )
         val listener = when (val admission = endpoint.open(connection)) {
             is WsAdmission.Accepted -> admission.listener
@@ -294,5 +295,6 @@ class WebServer(
         private const val IO_TIMEOUT_MS = 10_000L
         private const val KEEP_ALIVE_TIMEOUT_MS = 5_000L
         private const val ADDRESS_CHARS = "0123456789abcdefABCDEF:."
+        private val CLIENT_ID = Regex("[A-Za-z0-9-]{16,64}")
     }
 }

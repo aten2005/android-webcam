@@ -39,10 +39,30 @@ class SessionManager(
     @Volatile
     var admission: () -> WsAdmission.Refused? = { null }
 
-    /** Admits a viewer, waking the pipeline for the first one. */
-    @Synchronized
+    /**
+     * Admits a viewer, waking the pipeline for the first one. A page reconnecting after a network drop
+     * takes over its old session, which may not have noticed the drop yet and would otherwise hold a
+     * viewer slot until it times out.
+     */
     fun open(channel: WsChannel): WsAdmission {
-        admission()?.let { return it }
+        var replaced: ClientSink? = null
+        val admission = synchronized(this) {
+            admission()?.let { return it }
+            replaced = channel.clientId?.let { id -> clients.firstOrNull { it.channel.clientId == id } }
+            replaced?.let(::evict)
+            admit(channel)
+        }
+        // Closing a socket whose writer is stuck on a dead network can block, so it happens outside the lock.
+        replaced?.channel?.abort()
+        return admission
+    }
+
+    private fun evict(client: ClientSink) {
+        clients.remove(client)
+        if (talker === client) endTalk()
+    }
+
+    private fun admit(channel: WsChannel): WsAdmission {
         if (clients.size >= MAX_VIEWERS) return WsAdmission.Refused(CLOSE_TRY_AGAIN_LATER, "viewer limit reached")
         val client = ClientSink(channel, clock)
         pendingStop?.cancel()

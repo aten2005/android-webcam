@@ -15,6 +15,9 @@ import kotlin.concurrent.thread
 interface WsChannel {
     val remoteAddress: String
     val userAgent: String
+
+    /** Identifies one open viewer page across reconnects; null when the page did not send one. */
+    val clientId: String?
     val queuedBytes: Long
 
     /** Queues a droppable frame. Returns false, without queueing, when the viewer is too far behind. */
@@ -36,6 +39,7 @@ class WsConnection(
     private val output: OutputStream,
     override val remoteAddress: String,
     override val userAgent: String,
+    override val clientId: String? = null,
     private val maxQueuedBytes: Long = 4L * 1024 * 1024,
 ) : WsChannel {
     interface Listener {

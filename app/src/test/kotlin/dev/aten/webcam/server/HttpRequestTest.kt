@@ -32,6 +32,14 @@ class HttpRequestTest {
     }
 
     @Test
+    fun readsQueryParameters() {
+        val request = parse("GET /ws?clientx=1&client=abc&client=def HTTP/1.1\r\n\r\n")!!
+        assertEquals("abc", request.queryParam("client"))
+        assertNull(request.queryParam("missing"))
+        assertNull(parse("GET /ws HTTP/1.1\r\n\r\n")!!.queryParam("client"))
+    }
+
+    @Test
     fun readsBodyAndLeavesFollowingBytes() {
         val input = "POST /login HTTP/1.1\r\nContent-Length: 5\r\n\r\nhelloGET / HTTP/1.1\r\n\r\n"
             .toByteArray().inputStream()

@@ -14,7 +14,7 @@ import org.junit.Test
 class SessionManagerTest {
     private var now = 0L
 
-    private class FakeChannel(override val remoteAddress: String) : WsChannel {
+    private class FakeChannel(override val remoteAddress: String, override val clientId: String? = null) : WsChannel {
         override val userAgent = "test"
         override var queuedBytes = 0L
         var accepting = true
@@ -98,8 +98,8 @@ class SessionManagerTest {
         sessionEvents.add(streaming to viewers)
     }
 
-    private fun connect(address: String = "10.0.0.2"): Pair<FakeChannel, WsConnection.Listener> {
-        val channel = FakeChannel(address)
+    private fun connect(address: String = "10.0.0.2", clientId: String? = null): Pair<FakeChannel, WsConnection.Listener> {
+        val channel = FakeChannel(address, clientId)
         return channel to (manager.open(channel) as WsAdmission.Accepted).listener
     }
 
@@ -148,6 +148,43 @@ class SessionManagerTest {
     fun refusesViewersBeyondLimit() {
         repeat(SessionManager.MAX_VIEWERS) { connect("10.0.0.$it") }
         assertEquals(SessionManager.CLOSE_TRY_AGAIN_LATER, refusal()?.code)
+    }
+
+    @Test
+    fun reconnectWithSameClientIdReplacesGhost() {
+        val (ghost, ghostListener) = connect("10.0.0.2", PAGE_ID)
+        repeat(SessionManager.MAX_VIEWERS - 1) { connect("10.0.0.${it + 3}") }
+        assertEquals(SessionManager.CLOSE_TRY_AGAIN_LATER, refusal(FakeChannel("10.0.0.99", "another-page-id-0000"))?.code)
+        assertEquals(SessionManager.CLOSE_TRY_AGAIN_LATER, refusal(FakeChannel("10.0.0.99"))?.code)
+
+        val (returning, _) = connect("10.0.0.2", PAGE_ID)
+        assertTrue(ghost.aborted)
+        assertFalse(returning.aborted)
+        assertEquals(SessionManager.MAX_VIEWERS, sessionEvents.last().second.size)
+
+        ghostListener.onClosed()
+        assertEquals(SessionManager.MAX_VIEWERS, sessionEvents.last().second.size)
+        assertEquals(1, pipeline.count("start"))
+        assertEquals(0, pipeline.count("stop"))
+        assertTrue("the pipeline never went idle", scheduler.tasks.none { it.first == SessionManager.LINGER_MS })
+    }
+
+    @Test
+    fun replacingTheTalkerFreesTalkback() {
+        val (_, ghostListener) = connect("10.0.0.2", PAGE_ID)
+        ghostListener.onText("""{"type":"talkStart","sampleRate":16000}""")
+        val (returning, listener) = connect("10.0.0.2", PAGE_ID)
+        assertEquals(1, pipeline.count("talkStop"))
+        listener.onText("""{"type":"talkStart","sampleRate":16000}""")
+        assertTrue(returning.lastJson().getBoolean("granted"))
+    }
+
+    @Test
+    fun hostRefusalLeavesGhostInPlace() {
+        val (ghost, _) = connect("10.0.0.2", PAGE_ID)
+        manager.admission = { WsAdmission.Refused(SessionManager.CLOSE_BATTERY_LOW, "battery low") }
+        assertEquals(SessionManager.CLOSE_BATTERY_LOW, refusal(FakeChannel("10.0.0.2", PAGE_ID))?.code)
+        assertFalse(ghost.aborted)
     }
 
     @Test
@@ -354,5 +391,6 @@ class SessionManagerTest {
 
     private companion object {
         val PAYLOAD = ByteArray(200) { 1 }
+        const val PAGE_ID = "0d4c1d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
     }
 }

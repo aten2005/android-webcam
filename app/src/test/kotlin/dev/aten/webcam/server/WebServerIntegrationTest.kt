@@ -42,11 +42,12 @@ class WebServerIntegrationTest {
     private lateinit var clientContext: SSLContext
     private lateinit var client: HttpClient
 
-    /** Echoes binary frames back with a marker byte, and text frames upper-cased. */
+    /** Echoes binary frames back with a marker byte, and text frames upper-cased; "clientId?" is answered. */
     private val echoEndpoint = WsEndpoint { connection ->
         refusal ?: WsAdmission.Accepted(
             object : WsConnection.Listener {
-                override fun onText(text: String) = connection.sendText(text.uppercase())
+                override fun onText(text: String) =
+                    connection.sendText(if (text == "clientId?") connection.clientId.toString() else text.uppercase())
                 override fun onBinary(payload: ByteArray) {
                     connection.offer(WsFrameCodec.encode(WsOpcode.BINARY, byteArrayOf(0x7F), payload))
                 }
@@ -137,13 +138,18 @@ class WebServerIntegrationTest {
         }
     }
 
-    private fun openWebSocket(cookie: String?, originHeader: String? = origin, listener: Collector = Collector()): WebSocket =
+    private fun openWebSocket(
+        cookie: String?,
+        originHeader: String? = origin,
+        listener: Collector = Collector(),
+        target: String = "/ws",
+    ): WebSocket =
         client.newWebSocketBuilder()
             .apply {
                 cookie?.let { header("Cookie", it) }
                 originHeader?.let { header("Origin", it) }
             }
-            .buildAsync(URI("wss://127.0.0.1:${server.port}/ws"), listener)
+            .buildAsync(URI("wss://127.0.0.1:${server.port}$target"), listener)
             .get(10, TimeUnit.SECONDS)
 
     /** Returns 101 only when the client accepted the upgrade, otherwise the refusal's HTTP status. */
@@ -301,6 +307,17 @@ class WebServerIntegrationTest {
             val refused = Collector()
             openWebSocket(cookie, listener = refused)
             assertEquals(code, refused.closed.get(5, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun webSocketPassesOnlyWellFormedClientIds() {
+        val cookie = loginCookie()
+        val pageId = "0d4c1d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+        for ((target, expected) in listOf("/ws?client=$pageId" to pageId, "/ws?client=short" to "null", "/ws" to "null")) {
+            val listener = Collector()
+            openWebSocket(cookie, listener = listener, target = target).sendText("clientId?", true).get(5, TimeUnit.SECONDS)
+            assertEquals(target, expected, listener.messages.poll(5, TimeUnit.SECONDS))
         }
     }
 
