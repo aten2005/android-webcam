@@ -22,7 +22,10 @@ class MediaController(
     private val handler = Handler(thread.looper)
     private val video = VideoPipeline(context, handler, this)
     private val audio = AudioCapturePipeline(this)
-    private val talkback = TalkbackPlayer()
+    private val talkback = TalkbackPlayer { delayMs, release ->
+        // A handler that is already quitting refuses the message; the track must still be freed.
+        if (!handler.postDelayed(release, delayMs)) release()
+    }
 
     // Written on the handler thread, read from the audio thread as well.
     @Volatile
