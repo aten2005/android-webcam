@@ -70,6 +70,8 @@ class StreamService : Service() {
     private var networkCallbackRegistered = false
     private var batteryReceiverRegistered = false
 
+    @Volatile private var destroyed = false
+
     @Volatile private var identity: TlsIdentity? = null
     @Volatile private var sslContext: SSLContext? = null
 
@@ -139,6 +141,11 @@ class StreamService : Service() {
                     config, assets, sessions, LoginRateLimiter(), audit, sessionManager::open,
                 ) { message, error -> Log.w(TAG, message, error) }
                 started.start()
+                if (destroyed) {
+                    // Stop was requested while the listener was still coming up.
+                    started.stop()
+                    return@execute
+                }
                 server = started
                 publishStatus()
                 mainHandler.post(::registerNetworkCallback)
@@ -258,6 +265,7 @@ class StreamService : Service() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         if (networkCallbackRegistered) {
             getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
         }
