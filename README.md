@@ -66,6 +66,17 @@ while the tab is hidden; audio keeps playing.
 
 Up to 4 viewers can watch at once; one can talk at a time.
 
+### Unreliable networks
+
+The status badge in the toolbar shows **Live**, **Unstable** (nothing received for 4 s; the last
+picture stays up) or **Reconnecting**. After 10 s of silence the viewer gives up on the link and
+retries on its own with a growing delay (up to 10 s), showing why and a countdown; **Retry now**
+skips the wait and **Disconnect** stops it. It also retries at once when the browser comes back
+online or the tab becomes visible again. A viewer that reconnects takes over its own previous
+session on the phone, so a flaky link never locks itself out of the 4 viewer slots. When all slots
+are taken by others it keeps trying every 15 s; only low battery on the phone stops it for good.
+On the phone, a viewer that vanished without closing is dropped within about 20 s.
+
 ### Exposing it to the internet safely
 
 - Prefer a VPN such as Tailscale or WireGuard **running on your router or another always-on box**,
@@ -123,13 +134,21 @@ been verified on hardware yet:
 4. Video latency under ~0.5 s on the LAN; orientation correct for both cameras (use **Rotate** if
    the phone is mounted sideways); camera switch and torch work; a second viewer starts instantly;
    throttling one viewer (DevTools) does not disturb the other.
-5. Audio stays in sync for 30 minutes; hold-to-talk is audible on the phone; a second viewer is
-   refused while the first is talking.
+5. Audio stays in sync for 30 minutes. Hold-to-talk for 5 s is heard continuously on the phone (in
+   DevTools the WebSocket shows ~25 binary frames of 1281 bytes per second), a 0.3 s word is
+   heard, and word endings are not cut off. With the phone's media volume at zero the viewer gets a
+   notice. Alt-tabbing or switching tabs while holding stops talking. A second viewer is refused
+   while the first is talking. In Firefox, `adb logcat` shows talkback starting at 44.1 or 48 kHz.
 6. Chrome (desktop and Android), Firefox, Safari (macOS and iOS).
 7. Open the stock camera app mid-stream → the viewer sees a notice and video resumes when the
    camera is free again. Toggle Wi-Fi → the listener survives and the addresses refresh. Reboot →
    a "tap to resume" notification appears and works.
 8. Wrong passwords are delayed; the fingerprint in the app matches the browser's certificate viewer.
+9. Silent network drop. DevTools' *Offline* mode does not break an open WebSocket, so black-hole the
+   phone instead: `sudo iptables -I INPUT -s <phone-ip> -j DROP; sudo iptables -I OUTPUT -d <phone-ip> -j DROP`
+   (undo with `-D`), or walk out of Wi-Fi range. Expect **Unstable** after ~4 s, the reconnect
+   countdown after ~10 s, and a reconnect within a few seconds of removing the rules. Repeat with
+   all 4 viewers connected: the dropped one gets its own slot back.
 
 If audio is silent in every browser but video works, the device's Opus encoder output may not be
 what browsers expect; please capture `adb logcat` while connecting.
@@ -140,7 +159,8 @@ what browsers expect; please capture `adb logcat` while connecting.
   microphone service from the background. The app posts a notification; one tap resumes it.
 - Android's quick-settings camera/microphone privacy toggles produce black video or silence without
   any error the app could report.
-- Talkback is half-duplex and uncompressed (16 kHz PCM, ~256 kbit/s while talking).
+- Talkback is half-duplex and uncompressed (16 kHz PCM, ~256 kbit/s while talking; ~768 kbit/s in
+  browsers that can only capture at 48 kHz).
 - The certificate is reissued when the phone gets an address it has not had before, which makes
   browsers ask for the exception again.
 
