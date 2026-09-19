@@ -5,9 +5,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import androidx.core.net.toUri
 import android.provider.Settings as SystemSettings
 
 data class PermissionState(
@@ -45,13 +45,13 @@ object SystemScreens {
     @SuppressLint("BatteryLife")
     fun requestBatteryExemption(context: Context) {
         context.startActivity(
-            Intent(SystemSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")),
+            Intent(SystemSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri()),
         )
     }
 
     fun openAppSettings(context: Context) {
         context.startActivity(
-            Intent(SystemSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")),
+            Intent(SystemSettings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()),
         )
     }
 }
