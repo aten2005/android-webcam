@@ -6,6 +6,15 @@ const FRAME_AUDIO = 3;
 const FRAME_TALKBACK_PCM = 16;
 const MEDIA_HEADER_BYTES = 9;
 const CLOSE_BATTERY_LOW = 4001;
+const CLOSE_TRY_AGAIN_LATER = 1013;
+const CONNECT_TIMEOUT_MS = 8000;
+const PROBE_TIMEOUT_MS = 5000;
+// The phone sends at least a heartbeat every 2 s.
+const STALE_MS = 4000;
+const DEAD_MS = 10_000;
+const RETRY_MIN_MS = 1000;
+const RETRY_MAX_MS = 10_000;
+const RETRY_BUSY_MS = 15_000;
 const MAX_DECODE_QUEUE = 5;
 const MAX_UPLINK_BUFFER_BYTES = 64 * 1024;
 const MIC_IDLE_RELEASE_MS = 60_000;
@@ -20,6 +29,8 @@ const overlay = $('overlay');
 const overlayText = $('overlay-text');
 const noticeText = $('notice');
 const statsText = $('stats');
+const statusText = $('status');
+const unstableText = $('unstable');
 const buttons = {
   start: $('start'), mute: $('mute'), talk: $('talk'), switchCamera: $('switch-camera'),
   torch: $('torch'), rotate: $('rotate'), fullscreen: $('fullscreen'),
@@ -27,10 +38,19 @@ const buttons = {
 };
 const qualitySelect = $('quality');
 
+// Lets the phone recognise this page when it reconnects, so its old, possibly half-dead session gives up its slot.
+const clientId = crypto.randomUUID?.() ?? '';
+
 let socket = null;
 let wantConnection = false;
-let reconnectDelayMs = 1000;
+let admitted = false;
+let lastMessageAt = 0;
+let connectTimer = 0;
+let reconnectDelayMs = RETRY_MIN_MS;
 let reconnectTimer = 0;
+let retryAt = 0;
+let retryReason = '';
+let retryGeneration = 0;
 
 let videoDecoder = null;
 let videoConfig = null;
@@ -66,7 +86,7 @@ let drawnFrames = 0;
 
 async function start() {
   if (!('VideoDecoder' in window) || !('AudioDecoder' in window) || !window.isSecureContext) {
-    showOverlay('This browser cannot play the stream. Use a current version of Chrome, Edge, Safari or Firefox over HTTPS.', false);
+    showOverlay('This browser cannot play the stream. Use a current version of Chrome, Edge, Safari or Firefox over HTTPS.');
     return;
   }
   buttons.start.disabled = true;
@@ -76,67 +96,184 @@ async function start() {
     showNotice(`Audio output unavailable: ${error.message}`);
   }
   wantConnection = true;
+  reconnectDelayMs = RETRY_MIN_MS;
   connect();
 }
 
 function connect() {
-  clearTimeout(reconnectTimer);
-  showOverlay('Connecting…', false);
-  socket = new WebSocket(`wss://${location.host}/ws`);
-  socket.binaryType = 'arraybuffer';
-  socket.onopen = () => {
-    reconnectDelayMs = 1000;
-    hideOverlay();
-    setControlsEnabled(true);
+  clearRetry();
+  dropSocket();
+  admitted = false;
+  setStatus(retryReason ? 'reconnecting' : 'connecting');
+  showOverlay(retryReason ? `${retryReason} Reconnecting…` : 'Connecting…');
+  buttons.disconnect.disabled = false;
+  const ws = new WebSocket(`wss://${location.host}/ws${clientId ? `?client=${clientId}` : ''}`);
+  ws.binaryType = 'arraybuffer';
+  socket = ws;
+  // Also covers an upgrade that succeeds but is never followed by the admission heartbeat.
+  connectTimer = setTimeout(() => declareDead(ws), CONNECT_TIMEOUT_MS);
+  ws.onopen = () => {
+    if (ws !== socket) return;
+    lastMessageAt = performance.now();
     if (document.hidden) send({ type: 'pauseVideo', paused: true });
   };
-  socket.onmessage = (event) => {
+  ws.onmessage = (event) => {
+    if (ws !== socket) return;
+    lastMessageAt = performance.now();
+    if (!admitted) onAdmitted();
+    else if (!unstableText.hidden) markStable();
     if (typeof event.data === 'string') handleControl(JSON.parse(event.data));
     else handleMedia(event.data);
   };
-  socket.onclose = (event) => {
-    socket = null;
-    stopTalking();
-    setControlsEnabled(false);
-    resetDecoders();
-    if (event.code === 1008) {
-      location.replace('/login');
-    } else if (!wantConnection) {
-      showOverlay('Disconnected. The camera is off.', true);
-    } else if (event.code === CLOSE_BATTERY_LOW) {
-      // Reconnecting would only switch the camera back on and drain the battery further.
-      wantConnection = false;
-      showOverlay('Streaming stopped: the device battery is low.', true);
-    } else if (event.code === 1013) {
-      wantConnection = false;
-      showOverlay('The device is not accepting viewers right now (viewer limit reached or battery low).', true);
-    } else {
-      showOverlay('Connection lost. Reconnecting…', false);
-      reconnectTimer = setTimeout(checkSessionThenConnect, reconnectDelayMs);
-      reconnectDelayMs = Math.min(reconnectDelayMs * 2, 15_000);
-    }
+  ws.onclose = (event) => {
+    if (ws === socket) onSocketGone(event.code);
   };
+}
+
+// The phone answers every admitted viewer at once, while a refusal arrives as a close right after the upgrade.
+function onAdmitted() {
+  admitted = true;
+  clearTimeout(connectTimer);
+  reconnectDelayMs = RETRY_MIN_MS;
+  retryReason = '';
+  hideOverlay();
+  setControlsEnabled(true);
+  setStatus('live');
+}
+
+// Detaches the current socket without waiting for a closing handshake that a dead network never completes.
+function dropSocket() {
+  const ws = socket;
+  socket = null;
+  clearTimeout(connectTimer);
+  if (!ws) return;
+  ws.onopen = ws.onmessage = ws.onclose = null;
+  try {
+    ws.close(1000);
+  } catch (_) {
+    // Already closing.
+  }
+}
+
+function declareDead(ws) {
+  if (ws !== socket) return;
+  dropSocket();
+  onSocketGone(0);
+}
+
+function onSocketGone(code) {
+  const wasAdmitted = admitted;
+  socket = null;
+  admitted = false;
+  clearTimeout(connectTimer);
+  clearRetry();
+  stopTalking();
+  setControlsEnabled(false);
+  resetDecoders();
+  unstableText.hidden = true;
+  if (code === 1008) {
+    location.replace('/login');
+  } else if (!wantConnection) {
+    showStopped('Disconnected. The camera is off.');
+  } else if (code === CLOSE_BATTERY_LOW) {
+    // Reconnecting would only switch the camera back on and drain the battery further.
+    wantConnection = false;
+    showStopped('Streaming stopped: the device battery is low.');
+  } else if (code === CLOSE_TRY_AGAIN_LATER) {
+    scheduleRetry('The device has reached its viewer limit.', RETRY_BUSY_MS);
+  } else {
+    scheduleRetry(wasAdmitted ? 'Connection lost.' : unreachableReason(), nextBackoff());
+  }
+}
+
+function showStopped(text) {
+  retryReason = '';
+  setStatus('off');
+  showOverlay(text, 'Connect');
+}
+
+function unreachableReason() {
+  return navigator.onLine ? 'Cannot reach the device.' : 'You appear to be offline.';
+}
+
+function nextBackoff() {
+  const delayMs = reconnectDelayMs * (0.8 + Math.random() * 0.4);
+  reconnectDelayMs = Math.min(reconnectDelayMs * 2, RETRY_MAX_MS);
+  return delayMs;
+}
+
+function scheduleRetry(reason, delayMs) {
+  clearRetry();
+  retryReason = reason;
+  retryAt = performance.now() + delayMs;
+  reconnectTimer = setTimeout(checkSessionThenConnect, delayMs);
+  buttons.disconnect.disabled = false;
+  setStatus(navigator.onLine ? 'reconnecting' : 'offline');
+  renderRetry();
+}
+
+function renderRetry() {
+  const seconds = Math.max(1, Math.ceil((retryAt - performance.now()) / 1000));
+  showOverlay(`${retryReason} Retrying in ${seconds} s…`, 'Retry now');
+}
+
+// Also invalidates a probe that is still in flight.
+function clearRetry() {
+  clearTimeout(reconnectTimer);
+  retryAt = 0;
+  retryGeneration++;
 }
 
 // A failed WebSocket handshake hides its HTTP status, so probe whether the session is still valid.
 async function checkSessionThenConnect() {
+  clearRetry();
+  const generation = retryGeneration;
+  showOverlay(`${retryReason} Reconnecting…`, 'Retry now');
+  let reachable = false;
   try {
-    const response = await fetch('/app.js', { method: 'HEAD', cache: 'no-store' });
+    const response = await fetch('/app.js', {
+      method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
     if (response.status === 401) {
       location.replace('/login');
       return;
     }
+    reachable = true;
   } catch (_) {
-    // Device unreachable; keep retrying.
+    // Unreachable or timed out.
   }
-  if (wantConnection) connect();
+  if (generation !== retryGeneration || !wantConnection || socket) return;
+  if (reachable) connect();
+  else scheduleRetry(unreachableReason(), nextBackoff());
+}
+
+function retryNow() {
+  if (!wantConnection || socket) return;
+  reconnectDelayMs = RETRY_MIN_MS;
+  connect();
+}
+
+// Messages are not throttled in background tabs, so a hidden viewer does not look dead; it is just checked less often.
+function checkLiveness() {
+  if (!socket || !admitted) return;
+  const silentMs = performance.now() - lastMessageAt;
+  if (silentMs > DEAD_MS) {
+    declareDead(socket);
+  } else if (silentMs > STALE_MS && unstableText.hidden) {
+    unstableText.hidden = false;
+    setStatus('unstable');
+  }
+}
+
+function markStable() {
+  unstableText.hidden = true;
+  setStatus('live');
 }
 
 function disconnect() {
   wantConnection = false;
-  clearTimeout(reconnectTimer);
-  if (socket) socket.close(1000);
-  else showOverlay('Disconnected. The camera is off.', true);
+  dropSocket();
+  onSocketGone(1000);
 }
 
 function send(message) {
@@ -459,11 +596,22 @@ function closeQuietly(decoder) {
   }
 }
 
-function showOverlay(text, offerConnect) {
+function showOverlay(text, buttonLabel = null) {
   overlayText.textContent = text;
-  buttons.start.hidden = !offerConnect;
+  buttons.start.hidden = !buttonLabel;
+  if (buttonLabel) buttons.start.textContent = buttonLabel;
   buttons.start.disabled = false;
   overlay.hidden = false;
+}
+
+const STATUS_LABELS = {
+  connecting: 'Connecting', live: 'Live', unstable: 'Unstable', reconnecting: 'Reconnecting', offline: 'Offline', off: '',
+};
+
+function setStatus(state) {
+  statusText.dataset.state = state;
+  statusText.textContent = STATUS_LABELS[state];
+  statusText.hidden = !STATUS_LABELS[state];
 }
 
 function hideOverlay() {
@@ -536,11 +684,35 @@ buttons.talk.addEventListener('keyup', (event) => {
 // A hidden tab cannot show video, so the phone is told to stop sending (and capturing) it.
 document.addEventListener('visibilitychange', () => {
   send({ type: 'pauseVideo', paused: document.hidden });
-  if (document.hidden) stopTalking();
-  else waitingForKey = true;
+  if (document.hidden) {
+    stopTalking();
+    return;
+  }
+  waitingForKey = true;
+  // Timers barely run in a hidden tab, so a drop that happened meanwhile is dealt with now rather than later.
+  if (retryAt) retryNow();
+  else checkLiveness();
+});
+
+window.addEventListener('online', () => {
+  if (retryAt) retryNow();
+  else checkLiveness();
+});
+// Only a hint: a LAN without internet access can count as offline, so the watchdog still decides.
+window.addEventListener('offline', () => {
+  if (socket && admitted) return;
+  setStatus('offline');
+  if (retryAt) {
+    retryReason = unreachableReason();
+    renderRetry();
+  }
 });
 
 // A key or pointer released while another window has focus never reaches this page.
 window.addEventListener('blur', stopTalking);
 
-setInterval(updateStats, 1000);
+setInterval(() => {
+  updateStats();
+  checkLiveness();
+  if (retryAt) renderRetry();
+}, 1000);

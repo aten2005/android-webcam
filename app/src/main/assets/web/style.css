@@ -7,6 +7,7 @@
   --muted: #8b96a3;
   --accent: #4dd0a8;
   --danger: #ff6b6b;
+  --warning: #f5c542;
 }
 
 * { box-sizing: border-box; }
@@ -114,5 +115,19 @@ button.talking { background: var(--danger); border-color: var(--danger); color: 
 .toolbar .spacer { flex: 1; }
 .toolbar .inline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
 .stats { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.notice.top { top: 16px; bottom: auto; border-color: var(--warning); }
+
+.status {
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status[data-state="live"] { color: var(--accent); }
+.status[data-state="connecting"], .status[data-state="unstable"], .status[data-state="reconnecting"] { color: var(--warning); }
+.status[data-state="offline"] { color: var(--danger); }
 
 #talk { touch-action: none; user-select: none; -webkit-user-select: none; }
