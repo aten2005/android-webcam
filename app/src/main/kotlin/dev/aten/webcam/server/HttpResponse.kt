@@ -13,10 +13,15 @@ class HttpResponse(
     fun write(out: OutputStream, host: String?, omitBody: Boolean = false) {
         val head = StringBuilder(512)
         head.append("HTTP/1.1 ").append(status).append(' ').append(reason(status)).append("\r\n")
-        contentType?.let { head.append("Content-Type: ").append(it).append("\r\n") }
-        head.append("Content-Length: ").append(body.size).append("\r\n")
-        head.append("Connection: ").append(if (close) "close" else "keep-alive").append("\r\n")
-        for ((name, value) in securityHeaders(host) + headers) {
+        val switchingProtocols = status == 101
+        if (switchingProtocols) {
+            head.append("Connection: Upgrade\r\n")
+        } else {
+            contentType?.let { head.append("Content-Type: ").append(it).append("\r\n") }
+            head.append("Content-Length: ").append(body.size).append("\r\n")
+            head.append("Connection: ").append(if (close) "close" else "keep-alive").append("\r\n")
+        }
+        for ((name, value) in (if (switchingProtocols) emptyList() else securityHeaders(host)) + headers) {
             require(value.none { it == '\r' || it == '\n' }) { "header value contains a line break" }
             head.append(name).append(": ").append(value).append("\r\n")
         }
@@ -40,7 +45,8 @@ class HttpResponse(
                 "Content-Security-Policy" to
                     "default-src 'self'; connect-src 'self'$wsSource; frame-ancestors 'none'; base-uri 'none'",
                 "X-Content-Type-Options" to "nosniff",
-                "Referrer-Policy" to "no-referrer",
+                // "no-referrer" would make browsers send "Origin: null" on same-origin POSTs, defeating the Origin check.
+                "Referrer-Policy" to "same-origin",
                 "Permissions-Policy" to "camera=(), microphone=(self)",
                 "Cache-Control" to "no-store",
             )
