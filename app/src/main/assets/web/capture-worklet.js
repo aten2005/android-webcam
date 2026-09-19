@@ -7,7 +7,8 @@ class CaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.active = false;
-    this.chunk = new Int16Array(Math.round(sampleRate * CHUNK_SECONDS));
+    this.chunkLength = Math.round(sampleRate * CHUNK_SECONDS);
+    this.chunk = new Int16Array(this.chunkLength);
     this.filled = 0;
     this.port.onmessage = (event) => {
       this.active = event.data.active;
@@ -21,10 +22,10 @@ class CaptureProcessor extends AudioWorkletProcessor {
     for (let i = 0; i < input.length; i++) {
       const sample = Math.max(-1, Math.min(1, input[i]));
       this.chunk[this.filled++] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-      if (this.filled === this.chunk.length) {
-        const full = this.chunk;
-        this.port.postMessage(full.buffer, [full.buffer]);
-        this.chunk = new Int16Array(full.length);
+      if (this.filled === this.chunkLength) {
+        // Transferring detaches the buffer, after which the old array reports a length of 0.
+        this.port.postMessage(this.chunk.buffer, [this.chunk.buffer]);
+        this.chunk = new Int16Array(this.chunkLength);
         this.filled = 0;
       }
     }

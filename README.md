@@ -34,6 +34,7 @@ printf 'sdk.dir=%s\n' "$HOME/Android/Sdk" > local.properties
 export JAVA_HOME=/usr/lib/jvm/java-26
 
 ./gradlew assembleDebug testDebugUnitTest lintDebug
+node --test app/src/test/js/capture-worklet.test.mjs   # browser-side audio capture, needs Node 20+
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 

@@ -42,6 +42,9 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+      - name: Web worklet tests
+        run: node --test app/src/test/js/capture-worklet.test.mjs
+
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --console=plain
 
