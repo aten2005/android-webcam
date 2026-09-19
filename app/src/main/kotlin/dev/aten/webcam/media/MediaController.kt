@@ -17,11 +17,14 @@ import dev.aten.webcam.session.WireProtocol
 class MediaController(
     private val context: Context,
     private val defaultQuality: () -> String,
-) : MediaPipeline, VideoPipeline.Listener {
+) : MediaPipeline, VideoPipeline.Listener, AudioCapturePipeline.Listener {
     private val thread = HandlerThread("media").apply { start() }
     private val handler = Handler(thread.looper)
     private val video = VideoPipeline(context, handler, this)
+    private val audio = AudioCapturePipeline(this)
 
+    // Written on the handler thread, read from the audio thread as well.
+    @Volatile
     private var sink: MediaSink? = null
     private var preset = QualityPreset.byName(defaultQuality())
     private var facing = CameraSelector.BACK
@@ -34,11 +37,13 @@ class MediaController(
         bitrateScale = 1f
         videoPaused = false
         startVideo()
+        if (granted(Manifest.permission.RECORD_AUDIO)) audio.start()
         publishState()
     }
 
     override fun stop() = post {
         video.stop()
+        audio.stop()
         sink = null
     }
 
@@ -111,6 +116,19 @@ class MediaController(
         publishState()
     }
 
+    override fun onAudioConfig(codec: String, sampleRate: Int, channels: Int, description: ByteArray?) {
+        sink?.onAudioConfig(WireProtocol.audioConfig(codec, sampleRate, channels, description))
+    }
+
+    override fun onAudioFrame(ptsUs: Long, payload: ByteArray) {
+        sink?.onAudioFrame(ptsUs, payload)
+    }
+
+    override fun onAudioError(message: String) = post {
+        sink?.onNotice(message)
+        publishState()
+    }
+
     private fun startVideo() {
         if (!granted(Manifest.permission.CAMERA)) {
             sink?.onNotice("Camera permission has not been granted on the device.")
@@ -128,7 +146,7 @@ class MediaController(
             torchAvailable = video.torchAvailable,
             torch = video.torchOn,
             quality = preset.name,
-            audioAvailable = false,
+            audioAvailable = audio.isRunning,
         )
         sink?.onState(WireProtocol.state(state))
     }
