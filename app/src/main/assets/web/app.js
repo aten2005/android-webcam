@@ -9,6 +9,8 @@ const CLOSE_BATTERY_LOW = 4001;
 const MAX_DECODE_QUEUE = 5;
 const MAX_UPLINK_BUFFER_BYTES = 64 * 1024;
 const MIC_IDLE_RELEASE_MS = 60_000;
+const TALK_SAMPLE_RATE = 16000;
+const TALK_REPLY_TIMEOUT_MS = 3000;
 const ROTATION_KEY = 'webcam.rotationOffset';
 
 const $ = (id) => document.getElementById(id);
@@ -48,8 +50,12 @@ let talkWanted = false;
 let talking = false;
 let micStream = null;
 let micContext = null;
+let micSource = null;
 let captureNode = null;
+let micSetup = null;
 let micReleaseTimer = 0;
+let talkPress = 0;
+let talkReplyTimer = 0;
 
 let pipelineState = null;
 let noticeTimer = 0;
@@ -288,38 +294,82 @@ function updateOutputGain() {
 // ---------------------------------------------------------------- talkback
 
 async function beginTalking() {
-  if (talkWanted || !socket) return;
+  if (talkWanted || !socket || socket.readyState !== WebSocket.OPEN) return;
   talkWanted = true;
+  const press = ++talkPress;
   clearTimeout(micReleaseTimer);
   try {
     await ensureMicrophone();
   } catch (error) {
-    talkWanted = false;
+    if (press === talkPress) talkWanted = false;
     showNotice(`Microphone unavailable: ${error.message}`);
     return;
   }
   // The permission prompt can outlast the button press.
-  if (talkWanted) send({ type: 'talkStart', sampleRate: micContext.sampleRate });
+  if (press !== talkPress || !talkWanted) {
+    if (!talkWanted) scheduleMicRelease();
+    return;
+  }
+  send({ type: 'talkStart', sampleRate: micContext.sampleRate });
+  talkReplyTimer = setTimeout(() => {
+    showNotice('No response from the device.');
+    stopTalking();
+  }, TALK_REPLY_TIMEOUT_MS);
 }
 
-async function ensureMicrophone() {
+// Presses that overlap a pending permission prompt share one setup instead of opening the microphone twice.
+function ensureMicrophone() {
+  if (!micSetup) micSetup = openMicrophone().finally(() => { micSetup = null; });
+  return micSetup;
+}
+
+async function openMicrophone() {
   if (micStream) {
     if (micContext.state === 'suspended') await micContext.resume();
     return;
   }
-  micStream = await navigator.mediaDevices.getUserMedia({
+  const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
-  // Capturing at 16 kHz lets the phone play the samples as-is, with no resampler on either end.
-  micContext = new AudioContext({ sampleRate: 16000 });
-  await micContext.audioWorklet.addModule('/capture-worklet.js');
-  captureNode = new AudioWorkletNode(micContext, 'capture', { numberOfOutputs: 0 });
-  captureNode.port.onmessage = (event) => sendTalkback(event.data);
-  micContext.createMediaStreamSource(micStream).connect(captureNode);
+  try {
+    let graph;
+    try {
+      // Capturing at 16 kHz lets the phone play the samples as-is, with no resampler on either end.
+      graph = await buildMicGraph(stream, { sampleRate: TALK_SAMPLE_RATE });
+    } catch (_) {
+      // Some browsers can only capture at the hardware's own rate.
+      graph = await buildMicGraph(stream, {});
+    }
+    micContext = graph.context;
+    micSource = graph.source;
+    captureNode = graph.capture;
+    micStream = stream;
+  } catch (error) {
+    stream.getTracks().forEach((track) => track.stop());
+    throw error;
+  }
+}
+
+async function buildMicGraph(stream, contextOptions) {
+  const context = new AudioContext(contextOptions);
+  try {
+    await context.audioWorklet.addModule('/capture-worklet.js');
+    const capture = new AudioWorkletNode(context, 'capture', { numberOfOutputs: 0 });
+    capture.port.onmessage = (event) => sendTalkback(event.data);
+    // The caller keeps the source referenced: nothing here reaches the destination, so it could be collected.
+    const source = context.createMediaStreamSource(stream);
+    source.connect(capture);
+    context.resume().catch(() => {});
+    return { context, source, capture };
+  } catch (error) {
+    context.close();
+    throw error;
+  }
 }
 
 function onTalkReply(message) {
-  if (message.granted && talkWanted) {
+  clearTimeout(talkReplyTimer);
+  if (message.granted && talkWanted && captureNode) {
     talking = true;
     captureNode.port.postMessage({ active: true });
     buttons.talk.classList.add('talking');
@@ -344,16 +394,19 @@ function sendTalkback(pcmBuffer) {
 function stopTalking() {
   const wasActive = talkWanted || talking;
   talkWanted = false;
+  clearTimeout(talkReplyTimer);
   if (captureNode) captureNode.port.postMessage({ active: false });
   if (talking) send({ type: 'talkStop' });
   talking = false;
   buttons.talk.classList.remove('talking');
   buttons.talk.textContent = 'Hold to talk';
   updateOutputGain();
-  if (wasActive && micStream) {
-    clearTimeout(micReleaseTimer);
-    micReleaseTimer = setTimeout(releaseMicrophone, MIC_IDLE_RELEASE_MS);
-  }
+  if (wasActive && micStream) scheduleMicRelease();
+}
+
+function scheduleMicRelease() {
+  clearTimeout(micReleaseTimer);
+  micReleaseTimer = setTimeout(releaseMicrophone, MIC_IDLE_RELEASE_MS);
 }
 
 // Keeps the microphone warm between presses, then frees it so the browser's recording indicator clears.
@@ -363,6 +416,7 @@ function releaseMicrophone() {
   micContext.close();
   micStream = null;
   micContext = null;
+  micSource = null;
   captureNode = null;
 }
 
@@ -469,6 +523,8 @@ buttons.talk.addEventListener('pointerdown', (event) => {
 });
 buttons.talk.addEventListener('pointerup', stopTalking);
 buttons.talk.addEventListener('pointercancel', stopTalking);
+buttons.talk.addEventListener('lostpointercapture', stopTalking);
+buttons.talk.addEventListener('blur', stopTalking);
 buttons.talk.addEventListener('contextmenu', (event) => event.preventDefault());
 buttons.talk.addEventListener('keydown', (event) => {
   if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) beginTalking();
@@ -480,7 +536,11 @@ buttons.talk.addEventListener('keyup', (event) => {
 // A hidden tab cannot show video, so the phone is told to stop sending (and capturing) it.
 document.addEventListener('visibilitychange', () => {
   send({ type: 'pauseVideo', paused: document.hidden });
-  if (!document.hidden) waitingForKey = true;
+  if (document.hidden) stopTalking();
+  else waitingForKey = true;
 });
+
+// A key or pointer released while another window has focus never reaches this page.
+window.addEventListener('blur', stopTalking);
 
 setInterval(updateStats, 1000);
