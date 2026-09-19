@@ -40,6 +40,11 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 `./gradlew assembleRelease` produces a minified (~4 MB) but **unsigned** APK; sign it with your own
 key (`apksigner`) before installing. For personal use the debug APK is fine.
 
+Every push also builds on GitHub Actions (`.github/workflows/build.yml`): the debug APK is attached
+to the run as the `ip-webcam-debug-<commit>` artifact, then the unit tests run. Each CI build is
+signed with that runner's throwaway debug key, so installing one over an APK from a different
+build requires uninstalling first.
+
 `targetSdk` is deliberately 36 while `compileSdk` is 37: targeting 37 brings Android's new
 local-network permission, which needs testing on a device before it is adopted.
 
