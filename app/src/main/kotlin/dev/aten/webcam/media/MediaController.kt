@@ -22,6 +22,7 @@ class MediaController(
     private val handler = Handler(thread.looper)
     private val video = VideoPipeline(context, handler, this)
     private val audio = AudioCapturePipeline(this)
+    private val talkback = TalkbackPlayer()
 
     // Written on the handler thread, read from the audio thread as well.
     @Volatile
@@ -44,6 +45,7 @@ class MediaController(
     override fun stop() = post {
         video.stop()
         audio.stop()
+        talkback.stop()
         sink = null
     }
 
@@ -84,11 +86,12 @@ class MediaController(
         publishState()
     }
 
-    override fun startTalkback(sampleRate: Int): Boolean = false
+    // Talkback bypasses the handler: audio arrives on the viewer's network thread and must not queue behind camera work.
+    override fun startTalkback(sampleRate: Int): Boolean = talkback.start(sampleRate)
 
-    override fun writeTalkback(pcm: ByteArray, offset: Int, length: Int) = Unit
+    override fun writeTalkback(pcm: ByteArray, offset: Int, length: Int) = talkback.write(pcm, offset, length)
 
-    override fun stopTalkback() = Unit
+    override fun stopTalkback() = talkback.stop()
 
     override fun onVideoConfig(sets: NalUtils.ParameterSets, width: Int, height: Int, rotation: Int, facing: String) {
         val config = WireProtocol.videoConfig(
