@@ -3,6 +3,7 @@ package dev.aten.webcam.media
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Handler
 import android.os.HandlerThread
 import dev.aten.webcam.session.MediaPipeline
@@ -90,7 +91,17 @@ class MediaController(
     }
 
     // Talkback bypasses the handler: audio arrives on the viewer's network thread and must not queue behind camera work.
-    override fun startTalkback(sampleRate: Int): Boolean = talkback.start(sampleRate)
+    override fun startTalkback(sampleRate: Int): Boolean {
+        if (!talkback.start(sampleRate)) return false
+        if (mediaVolumeMuted()) sink?.onNotice("The device's media volume is muted; talkback will not be heard.")
+        return true
+    }
+
+    private fun mediaVolumeMuted(): Boolean {
+        val audioManager = context.getSystemService(AudioManager::class.java) ?: return false
+        return audioManager.isStreamMute(AudioManager.STREAM_MUSIC) ||
+            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) == 0
+    }
 
     override fun writeTalkback(pcm: ByteArray, offset: Int, length: Int) = talkback.write(pcm, offset, length)
 
