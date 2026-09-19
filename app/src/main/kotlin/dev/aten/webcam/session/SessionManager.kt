@@ -24,6 +24,7 @@ class SessionManager(
     private val bitrate = BitrateController(clock)
     private var streaming = false
     private var pendingStop: Cancellable? = null
+    private var heartbeat: Cancellable? = null
     private var lastKeyRequestAt = Long.MIN_VALUE / 2
 
     @Volatile private var videoConfig: String? = null
@@ -68,6 +69,8 @@ class SessionManager(
         pendingStop?.cancel()
         pendingStop = null
 
+        // Sent first, so the page can tell being admitted apart from being refused right after the upgrade.
+        channel.sendText(WireProtocol.heartbeat())
         val sentVideo = videoConfig?.also(channel::sendText)
         val sentAudio = audioConfig?.also(channel::sendText)
         pipelineState?.let(channel::sendText)
@@ -84,8 +87,25 @@ class SessionManager(
             requestKeyFrame()
         }
         updateVideoPaused()
+        if (heartbeat == null) heartbeat = scheduler.schedule(HEARTBEAT_MS) { beat() }
         notifyObserver()
         return WsAdmission.Accepted(ClientListener(client))
+    }
+
+    @Synchronized
+    private fun beat() {
+        if (clients.isEmpty()) {
+            heartbeat = null
+            return
+        }
+        val text = WireProtocol.heartbeat()
+        clients.forEach { it.channel.sendText(text) }
+        heartbeat = scheduler.schedule(HEARTBEAT_MS) { beat() }
+    }
+
+    private fun stopHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = null
     }
 
     /** Disconnects everyone and releases the pipeline immediately, for when the service stops. */
@@ -96,6 +116,7 @@ class SessionManager(
     fun disconnectAll(code: Int, reason: String) {
         pendingStop?.cancel()
         pendingStop = null
+        stopHeartbeat()
         clients.forEach { it.channel.close(code, reason) }
         clients.clear()
         stopStreaming()
@@ -106,6 +127,7 @@ class SessionManager(
         if (!clients.remove(client)) return
         if (talker === client) endTalk()
         if (clients.isEmpty()) {
+            stopHeartbeat()
             // Reloading the page reconnects within moments; lingering avoids power-cycling the camera.
             pendingStop = scheduler.schedule(LINGER_MS) { stopIfIdle() }
         } else {
@@ -272,6 +294,7 @@ class SessionManager(
     companion object {
         const val MAX_VIEWERS = 4
         const val LINGER_MS = 2_000L
+        const val HEARTBEAT_MS = 2_000L
         const val KEY_REQUEST_INTERVAL_MS = 1_000L
         const val CLOSE_BATTERY_LOW = 4001
         const val CLOSE_TRY_AGAIN_LATER = 1013

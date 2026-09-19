@@ -115,7 +115,8 @@ class SessionManagerTest {
         assertEquals(true to listOf("10.0.0.2", "10.0.0.3"), sessionEvents.last())
 
         first.onClosed()
-        assertTrue(scheduler.tasks.isEmpty())
+        scheduler.runAll()
+        assertEquals(0, pipeline.count("stop"))
         second.onClosed()
         assertEquals(0, pipeline.count("stop"))
         assertEquals(SessionManager.LINGER_MS, scheduler.tasks.single().first)
@@ -130,7 +131,7 @@ class SessionManagerTest {
         val (_, listener) = connect()
         listener.onClosed()
         connect()
-        assertTrue(scheduler.tasks.isEmpty())
+        scheduler.runAll()
         assertEquals(1, pipeline.count("start"))
         assertEquals(0, pipeline.count("stop"))
     }
@@ -151,6 +152,31 @@ class SessionManagerTest {
     }
 
     @Test
+    fun sendsHeartbeatsOnlyWhileViewersAreConnected() {
+        val (channel, listener) = connect()
+        assertEquals("admission is confirmed at once", listOf(HEARTBEAT), channel.texts)
+        assertEquals(listOf(SessionManager.HEARTBEAT_MS), scheduler.tasks.map { it.first })
+
+        scheduler.runAll()
+        scheduler.runAll()
+        assertEquals(listOf(HEARTBEAT, HEARTBEAT, HEARTBEAT), channel.texts)
+        assertEquals("only one heartbeat is ever pending", 1, scheduler.tasks.size)
+
+        listener.onClosed()
+        scheduler.runAll()
+        assertEquals(1, pipeline.count("stop"))
+        assertTrue("the heartbeat stops with the last viewer", scheduler.tasks.isEmpty())
+        assertEquals(3, channel.texts.size)
+    }
+
+    @Test
+    fun disconnectingEveryoneStopsTheHeartbeat() {
+        connect()
+        manager.shutdown()
+        assertTrue(scheduler.tasks.isEmpty())
+    }
+
+    @Test
     fun reconnectWithSameClientIdReplacesGhost() {
         val (ghost, ghostListener) = connect("10.0.0.2", PAGE_ID)
         repeat(SessionManager.MAX_VIEWERS - 1) { connect("10.0.0.${it + 3}") }
@@ -164,9 +190,9 @@ class SessionManagerTest {
 
         ghostListener.onClosed()
         assertEquals(SessionManager.MAX_VIEWERS, sessionEvents.last().second.size)
+        scheduler.runAll()
         assertEquals(1, pipeline.count("start"))
-        assertEquals(0, pipeline.count("stop"))
-        assertTrue("the pipeline never went idle", scheduler.tasks.none { it.first == SessionManager.LINGER_MS })
+        assertEquals("the pipeline never went idle", 0, pipeline.count("stop"))
     }
 
     @Test
@@ -205,7 +231,10 @@ class SessionManagerTest {
         manager.onState("""{"type":"state"}""")
         now += 5000
         val (late, _) = connect("10.0.0.9")
-        assertEquals(listOf("videoConfig", "audioConfig", "state"), late.texts.map { JSONObject(it).getString("type") })
+        assertEquals(
+            listOf("heartbeat", "videoConfig", "audioConfig", "state"),
+            late.texts.map { JSONObject(it).getString("type") },
+        )
         assertEquals(1, pipeline.count("key"))
     }
 
@@ -392,5 +421,6 @@ class SessionManagerTest {
     private companion object {
         val PAYLOAD = ByteArray(200) { 1 }
         const val PAGE_ID = "0d4c1d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+        val HEARTBEAT = WireProtocol.heartbeat()
     }
 }

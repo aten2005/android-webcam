@@ -37,6 +37,9 @@ class WireProtocolTest {
     }
 
     @Test
+    fun describesHeartbeat() = assertEquals("heartbeat", JSONObject(WireProtocol.heartbeat()).getString("type"))
+
+    @Test
     fun parsesValidControlMessages() {
         assertEquals(ControlMessage.SwitchCamera, ControlMessage.parse("""{"type":"switchCamera"}"""))
         assertEquals(ControlMessage.NeedKeyFrame, ControlMessage.parse("""{"type":"needKey"}"""))

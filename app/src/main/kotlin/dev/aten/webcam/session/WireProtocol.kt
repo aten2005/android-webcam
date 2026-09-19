@@ -58,6 +58,11 @@ object WireProtocol {
 
     fun notice(message: String): String = JSONObject().put("type", "notice").put("message", message).toString()
 
+    /** Browsers hide WebSocket pings from pages, so this is how a viewer knows the link is still alive. */
+    fun heartbeat(): String = HEARTBEAT
+
+    private const val HEARTBEAT = """{"type":"heartbeat"}"""
+
     fun talk(granted: Boolean, reason: String? = null): String =
         JSONObject().put("type", "talk").put("granted", granted).apply { reason?.let { put("reason", it) } }.toString()
 }
