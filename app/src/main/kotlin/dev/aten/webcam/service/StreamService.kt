@@ -1,18 +1,22 @@
 package dev.aten.webcam.service
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -64,6 +68,7 @@ class StreamService : Service() {
 
     private var server: WebServer? = null
     private var networkCallbackRegistered = false
+    private var batteryReceiverRegistered = false
 
     @Volatile private var identity: TlsIdentity? = null
     @Volatile private var sslContext: SSLContext? = null
@@ -82,6 +87,9 @@ class StreamService : Service() {
         }
         sessionManager = SessionManager(media, scheduler) { streaming, viewers ->
             mainHandler.post { onSessionChanged(streaming, viewers) }
+        }
+        sessionManager.admission = {
+            !isBatteryTooLow(registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)))
         }
         audit.onChange = { AppState.audit.value = audit.snapshot() }
         getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -143,6 +151,7 @@ class StreamService : Service() {
     }
 
     /** Only the types whose runtime permission is granted may be requested, or Android 14+ throws. */
+    @SuppressLint("InlinedApi") // The type constants are only handed to the platform on API 30+, below.
     private fun enterForeground(): Boolean {
         var types = 0
         if (granted(Manifest.permission.CAMERA)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
@@ -166,8 +175,37 @@ class StreamService : Service() {
         }
     }
 
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (isBatteryTooLow(intent)) {
+                sessionManager.disconnectAll(SessionManager.CLOSE_BATTERY_LOW, "device battery is low")
+            }
+        }
+    }
+
+    private fun isBatteryTooLow(battery: Intent?): Boolean {
+        val threshold = settings.minBatteryPercent
+        if (threshold <= 0 || battery == null) return false
+        if (battery.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0) return false
+        val level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        return level >= 0 && scale > 0 && level * 100 / scale < threshold
+    }
+
+    /** The battery is only watched while streaming; its sticky broadcast answers admission checks on demand. */
+    private fun watchBattery(watch: Boolean) {
+        if (watch && !batteryReceiverRegistered && settings.minBatteryPercent > 0) {
+            registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            batteryReceiverRegistered = true
+        } else if (!watch && batteryReceiverRegistered) {
+            unregisterReceiver(batteryReceiver)
+            batteryReceiverRegistered = false
+        }
+    }
+
     private fun onSessionChanged(streaming: Boolean, viewers: List<String>) {
         locks.setStreaming(streaming)
+        watchBattery(streaming)
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, buildNotification(streaming, viewers))
         AppState.status.value = AppState.status.value.copy(streaming = streaming, viewers = viewers)
@@ -224,6 +262,7 @@ class StreamService : Service() {
             getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
         }
         audit.onChange = null
+        watchBattery(false)
         val stopping = server
         server = null
         sessionManager.shutdown()

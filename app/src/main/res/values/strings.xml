@@ -5,4 +5,7 @@
     <string name="notification_standby">Standby · listening on port %1$d</string>
     <string name="notification_streaming">Streaming to %1$s</string>
     <string name="action_stop">Stop</string>
+    <string name="channel_resume">Resume after restart</string>
+    <string name="resume_title">IP Webcam is not listening</string>
+    <string name="resume_text">The phone restarted. Tap to resume listening.</string>
 </resources>

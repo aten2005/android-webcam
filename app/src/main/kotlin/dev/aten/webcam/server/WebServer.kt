@@ -216,7 +216,7 @@ class WebServer(
         )
         val listener = endpoint.open(connection)
         if (listener == null) {
-            connection.close(1013, "too many viewers")
+            connection.close(1013, "not accepting viewers")
             connection.run(object : WsConnection.Listener {})
             return
         }

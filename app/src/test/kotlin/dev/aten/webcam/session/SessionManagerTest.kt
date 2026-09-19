@@ -319,6 +319,21 @@ class SessionManagerTest {
     }
 
     @Test
+    fun lowBatteryDisconnectsViewersAndRefusesNewOnes() {
+        val (channel, _) = connect()
+        manager.admission = { false }
+        manager.disconnectAll(SessionManager.CLOSE_BATTERY_LOW, "battery low")
+        assertEquals(SessionManager.CLOSE_BATTERY_LOW, channel.closeCode)
+        assertEquals(1, pipeline.count("stop"))
+        assertNull(manager.open(FakeChannel("10.0.0.5")))
+        assertEquals(1, pipeline.count("start"))
+
+        manager.admission = { true }
+        assertNotNull(manager.open(FakeChannel("10.0.0.5")))
+        assertEquals(2, pipeline.count("start"))
+    }
+
+    @Test
     fun bitrateControllerStaysWithinBounds() {
         val controller = BitrateController { now }
         repeat(20) {

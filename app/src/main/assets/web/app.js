@@ -5,6 +5,7 @@ const FRAME_VIDEO_DELTA = 2;
 const FRAME_AUDIO = 3;
 const FRAME_TALKBACK_PCM = 16;
 const MEDIA_HEADER_BYTES = 9;
+const CLOSE_BATTERY_LOW = 4001;
 const MAX_DECODE_QUEUE = 5;
 const MAX_UPLINK_BUFFER_BYTES = 64 * 1024;
 const MIC_IDLE_RELEASE_MS = 60_000;
@@ -96,8 +97,13 @@ function connect() {
       location.replace('/login');
     } else if (!wantConnection) {
       showOverlay('Disconnected. The camera is off.', true);
+    } else if (event.code === CLOSE_BATTERY_LOW) {
+      // Reconnecting would only switch the camera back on and drain the battery further.
+      wantConnection = false;
+      showOverlay('Streaming stopped: the device battery is low.', true);
     } else if (event.code === 1013) {
-      showOverlay('Too many viewers are connected.', true);
+      wantConnection = false;
+      showOverlay('The device is not accepting viewers right now (viewer limit reached or battery low).', true);
     } else {
       showOverlay('Connection lost. Reconnecting…', false);
       reconnectTimer = setTimeout(checkSessionThenConnect, reconnectDelayMs);

@@ -34,10 +34,14 @@ class SessionManager(
     private var talkStartedAt = 0L
     private var talkBytes = 0L
 
-    /** Admits a viewer, waking the pipeline for the first one. Returns null when the viewer limit is hit. */
+    /** Consulted before admitting a viewer; lets the host refuse streaming, e.g. on low battery. */
+    @Volatile
+    var admission: () -> Boolean = { true }
+
+    /** Admits a viewer, waking the pipeline for the first one. Returns null when no viewer can be admitted. */
     @Synchronized
     fun open(channel: WsChannel): WsConnection.Listener? {
-        if (clients.size >= MAX_VIEWERS) return null
+        if (clients.size >= MAX_VIEWERS || !admission()) return null
         val client = ClientSink(channel, clock)
         pendingStop?.cancel()
         pendingStop = null
@@ -63,11 +67,14 @@ class SessionManager(
     }
 
     /** Disconnects everyone and releases the pipeline immediately, for when the service stops. */
+    fun shutdown() = disconnectAll(1001, "server stopping")
+
+    /** [code] tells the web client why; codes in the 4000 range stop it from reconnecting on its own. */
     @Synchronized
-    fun shutdown() {
+    fun disconnectAll(code: Int, reason: String) {
         pendingStop?.cancel()
         pendingStop = null
-        clients.forEach { it.channel.close(1001, "server stopping") }
+        clients.forEach { it.channel.close(code, reason) }
         clients.clear()
         stopStreaming()
     }
@@ -244,6 +251,7 @@ class SessionManager(
         const val MAX_VIEWERS = 4
         const val LINGER_MS = 2_000L
         const val KEY_REQUEST_INTERVAL_MS = 1_000L
+        const val CLOSE_BATTERY_LOW = 4001
         private const val BYTES_PER_SAMPLE = 2L
     }
 }
