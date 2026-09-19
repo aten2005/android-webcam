@@ -1,0 +1,53 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # compileSdk 37 is newer than what the runner image ships with.
+      - name: Install Android SDK platform
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" "platforms;android-37.0"
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --console=plain
+
+      # Uploaded before the tests run, so the APK is available even when a test fails.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ip-webcam-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --console=plain
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: test-report
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
