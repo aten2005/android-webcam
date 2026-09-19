@@ -23,9 +23,16 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import kotlin.concurrent.thread
 
+/** The outcome of offering a newly authenticated viewer to the streaming layer. */
+sealed interface WsAdmission {
+    class Accepted(val listener: WsConnection.Listener) : WsAdmission
+
+    /** The connection is closed with [code], which tells the web client whether retrying can help. */
+    class Refused(val code: Int, val reason: String) : WsAdmission
+}
+
 fun interface WsEndpoint {
-    /** Returns the listener for a newly authenticated viewer, or null when no more viewers fit. */
-    fun open(connection: WsConnection): WsConnection.Listener?
+    fun open(connection: WsConnection): WsAdmission
 }
 
 class WebServerConfig(
@@ -214,11 +221,13 @@ class WebServer(
             remoteAddress = clientAddress(request, socket),
             userAgent = request.header("user-agent").orEmpty(),
         )
-        val listener = endpoint.open(connection)
-        if (listener == null) {
-            connection.close(1013, "not accepting viewers")
-            connection.run(object : WsConnection.Listener {})
-            return
+        val listener = when (val admission = endpoint.open(connection)) {
+            is WsAdmission.Accepted -> admission.listener
+            is WsAdmission.Refused -> {
+                connection.close(admission.code, admission.reason)
+                connection.run(object : WsConnection.Listener {})
+                return
+            }
         }
         webSockets.add(connection)
         audit.record(connection.remoteAddress, AuditLog.VIEWER_CONNECTED, connection.userAgent)

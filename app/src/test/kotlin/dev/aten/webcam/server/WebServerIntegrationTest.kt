@@ -35,7 +35,7 @@ class WebServerIntegrationTest {
     private val sessions = SessionStore()
     private val audit = AuditLog()
     private var limiterTime = 0L
-    private var viewerLimitReached = false
+    private var refusal: WsAdmission.Refused? = null
     private var trustProxy = false
     private val accepted = CopyOnWriteArrayList<Unit>()
     private lateinit var server: WebServer
@@ -44,16 +44,14 @@ class WebServerIntegrationTest {
 
     /** Echoes binary frames back with a marker byte, and text frames upper-cased. */
     private val echoEndpoint = WsEndpoint { connection ->
-        if (viewerLimitReached) {
-            null
-        } else {
+        refusal ?: WsAdmission.Accepted(
             object : WsConnection.Listener {
                 override fun onText(text: String) = connection.sendText(text.uppercase())
                 override fun onBinary(payload: ByteArray) {
                     connection.offer(WsFrameCodec.encode(WsOpcode.BINARY, byteArrayOf(0x7F), payload))
                 }
-            }
-        }
+            },
+        )
     }
 
     @Before
@@ -298,10 +296,12 @@ class WebServerIntegrationTest {
         openWebSocket(cookie, listener = tooBig).sendBinary(ByteBuffer.wrap(ByteArray(70_000)), true)
         assertEquals(1009, tooBig.closed.get(5, TimeUnit.SECONDS))
 
-        viewerLimitReached = true
-        val refused = Collector()
-        openWebSocket(cookie, listener = refused)
-        assertEquals(1013, refused.closed.get(5, TimeUnit.SECONDS))
+        for (code in listOf(1013, 4001)) {
+            refusal = WsAdmission.Refused(code, "refused")
+            val refused = Collector()
+            openWebSocket(cookie, listener = refused)
+            assertEquals(code, refused.closed.get(5, TimeUnit.SECONDS))
+        }
     }
 
     @Test

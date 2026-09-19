@@ -1,5 +1,6 @@
 package dev.aten.webcam.session
 
+import dev.aten.webcam.server.WsAdmission
 import dev.aten.webcam.server.WsChannel
 import dev.aten.webcam.server.WsConnection
 import java.util.concurrent.CopyOnWriteArrayList
@@ -36,12 +37,13 @@ class SessionManager(
 
     /** Consulted before admitting a viewer; lets the host refuse streaming, e.g. on low battery. */
     @Volatile
-    var admission: () -> Boolean = { true }
+    var admission: () -> WsAdmission.Refused? = { null }
 
-    /** Admits a viewer, waking the pipeline for the first one. Returns null when no viewer can be admitted. */
+    /** Admits a viewer, waking the pipeline for the first one. */
     @Synchronized
-    fun open(channel: WsChannel): WsConnection.Listener? {
-        if (clients.size >= MAX_VIEWERS || !admission()) return null
+    fun open(channel: WsChannel): WsAdmission {
+        admission()?.let { return it }
+        if (clients.size >= MAX_VIEWERS) return WsAdmission.Refused(CLOSE_TRY_AGAIN_LATER, "viewer limit reached")
         val client = ClientSink(channel, clock)
         pendingStop?.cancel()
         pendingStop = null
@@ -63,7 +65,7 @@ class SessionManager(
         }
         updateVideoPaused()
         notifyObserver()
-        return ClientListener(client)
+        return WsAdmission.Accepted(ClientListener(client))
     }
 
     /** Disconnects everyone and releases the pipeline immediately, for when the service stops. */
@@ -252,6 +254,7 @@ class SessionManager(
         const val LINGER_MS = 2_000L
         const val KEY_REQUEST_INTERVAL_MS = 1_000L
         const val CLOSE_BATTERY_LOW = 4001
+        const val CLOSE_TRY_AGAIN_LATER = 1013
         private const val BYTES_PER_SAMPLE = 2L
     }
 }

@@ -34,6 +34,7 @@ import dev.aten.webcam.server.AssetSource
 import dev.aten.webcam.server.StaticAssets
 import dev.aten.webcam.server.WebServer
 import dev.aten.webcam.server.WebServerConfig
+import dev.aten.webcam.server.WsAdmission
 import dev.aten.webcam.session.Cancellable
 import dev.aten.webcam.session.Scheduler
 import dev.aten.webcam.session.SessionManager
@@ -91,7 +92,8 @@ class StreamService : Service() {
             mainHandler.post { onSessionChanged(streaming, viewers) }
         }
         sessionManager.admission = {
-            !isBatteryTooLow(registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)))
+            val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            if (isBatteryTooLow(battery)) WsAdmission.Refused(SessionManager.CLOSE_BATTERY_LOW, "device battery is low") else null
         }
         audit.onChange = { AppState.audit.value = audit.snapshot() }
         getSystemService(NotificationManager::class.java).createNotificationChannel(

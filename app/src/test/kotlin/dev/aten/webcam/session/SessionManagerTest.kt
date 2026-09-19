@@ -1,5 +1,6 @@
 package dev.aten.webcam.session
 
+import dev.aten.webcam.server.WsAdmission
 import dev.aten.webcam.server.WsChannel
 import dev.aten.webcam.server.WsConnection
 import org.json.JSONObject
@@ -99,8 +100,10 @@ class SessionManagerTest {
 
     private fun connect(address: String = "10.0.0.2"): Pair<FakeChannel, WsConnection.Listener> {
         val channel = FakeChannel(address)
-        return channel to manager.open(channel)!!
+        return channel to (manager.open(channel) as WsAdmission.Accepted).listener
     }
+
+    private fun refusal(channel: WsChannel = FakeChannel("10.0.0.99")) = manager.open(channel) as? WsAdmission.Refused
 
     private fun video(key: Boolean) = manager.onVideoFrame(now * 1000, PAYLOAD, key)
 
@@ -144,7 +147,7 @@ class SessionManagerTest {
     @Test
     fun refusesViewersBeyondLimit() {
         repeat(SessionManager.MAX_VIEWERS) { connect("10.0.0.$it") }
-        assertNull(manager.open(FakeChannel("10.0.0.99")))
+        assertEquals(SessionManager.CLOSE_TRY_AGAIN_LATER, refusal()?.code)
     }
 
     @Test
@@ -321,15 +324,15 @@ class SessionManagerTest {
     @Test
     fun lowBatteryDisconnectsViewersAndRefusesNewOnes() {
         val (channel, _) = connect()
-        manager.admission = { false }
+        manager.admission = { WsAdmission.Refused(SessionManager.CLOSE_BATTERY_LOW, "battery low") }
         manager.disconnectAll(SessionManager.CLOSE_BATTERY_LOW, "battery low")
         assertEquals(SessionManager.CLOSE_BATTERY_LOW, channel.closeCode)
         assertEquals(1, pipeline.count("stop"))
-        assertNull(manager.open(FakeChannel("10.0.0.5")))
+        assertEquals("the host's refusal code reaches the viewer", SessionManager.CLOSE_BATTERY_LOW, refusal()?.code)
         assertEquals(1, pipeline.count("start"))
 
-        manager.admission = { true }
-        assertNotNull(manager.open(FakeChannel("10.0.0.5")))
+        manager.admission = { null }
+        assertNull(refusal())
         assertEquals(2, pipeline.count("start"))
     }
 
